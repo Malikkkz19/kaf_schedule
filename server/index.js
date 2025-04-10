@@ -17,8 +17,8 @@ app.use(express.static(path.resolve(__dirname, './dist/')));
 
 const start = async () => {
     try { 
-        // await mongoose.connect('mongodb://database:27017/schedule-viewer');
-        await mongoose.connect('mongodb://localhost:27017/schedule-viewer');
+        await mongoose.connect('mongodb://database:27017/schedule-viewer');
+        // await mongoose.connect('mongodb://localhost:27017/schedule-viewer');
 
         app.listen(port, () => {
             console.log(`Server started on http://localhost:${port}`);
