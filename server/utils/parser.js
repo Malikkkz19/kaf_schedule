@@ -27,6 +27,7 @@ function getRectangleFromExcel(fileName, rectangleVertices) {
         for (let j = 0; j < selectedData[i].length; j++) {
             result.push({
                 date: '',
+                dateStr: '', // Добавляем строковое представление даты
                 jobs: [],
             });
         }
@@ -36,9 +37,27 @@ function getRectangleFromExcel(fileName, rectangleVertices) {
         let date = new Date();
         column.map((cell) => {
             if (/^\d+$/.test(cell)) {
+                // Исправляем расчет даты из Excel
+                // Excel хранит даты как количество дней с 1900-01-01
+                // Вычитаем 25567 (дни между 1900-01-01 и 1970-01-01) и 2 (поправка на особенности Excel)
                 date = new Date((cell - (25567 + 2)) * 86400 * 1000);
-                result[realIndex].date = date;
-            } else if  (cell?.includes(`СР`)) {
+                
+                // Добавляем проверку на валидность даты
+                if (!isNaN(date.getTime())) {
+                    result[realIndex].date = date;
+                    
+                    // Добавляем строковое представление даты в формате DD.MM.YYYY
+                    const day = date.getDate().toString().padStart(2, '0');
+                    const month = (date.getMonth() + 1).toString().padStart(2, '0');
+                    const year = date.getFullYear();
+                    result[realIndex].dateStr = `${day}.${month}.${year}`;
+                    
+                    // Для отладки
+                    console.log(`Обработана дата: ${result[realIndex].dateStr} (Excel: ${cell})`);
+                } else {
+                    console.log(`Невалидная дата из Excel: ${cell}`);
+                }
+            } else if (cell?.includes(`СР`)) {
                 const row = cell.split('\r\n');
                 result[realIndex].jobs.push(
                     `Тип занятия: ${row[0]}, дисциплина: ${row[0]}, аудитория: ${row[1]}`,
@@ -59,9 +78,16 @@ function getRectangleFromExcel(fileName, rectangleVertices) {
                         'Тип занятия: хозяйственный день, дисциплина: хозяйственный день, аудитория: Убежище',
                     );
 
-                    result[realIndex + 1].date = new Date(
-                        new Date(result[realIndex].date).getTime() + 24 * 60 * 60 * 1000,
-                    );
+                    // Создаем дату для воскресенья (следующий день после субботы)
+                    const nextDate = new Date(date.getTime() + 24 * 60 * 60 * 1000);
+                    result[realIndex + 1].date = nextDate;
+                    
+                    // Добавляем строковое представление даты для воскресенья
+                    const day = nextDate.getDate().toString().padStart(2, '0');
+                    const month = (nextDate.getMonth() + 1).toString().padStart(2, '0');
+                    const year = nextDate.getFullYear();
+                    result[realIndex + 1].dateStr = `${day}.${month}.${year}`;
+                    
                     for (let i = 0; i < 4; i += 1) {
                         result[realIndex + 1].jobs.push(
                             'Тип занятия: Выходной день, Выходной день, аудитория: Каз.63',
@@ -74,7 +100,8 @@ function getRectangleFromExcel(fileName, rectangleVertices) {
         });
     });
 
-    return result.filter((obj) => obj.date !== '');
+    // Фильтруем только записи с валидной датой и добавляем проверку на dateStr
+    return result.filter((obj) => obj.date !== '' && obj.dateStr !== '');
 }
 
 function getRange(fileName, rectangleVertices) {

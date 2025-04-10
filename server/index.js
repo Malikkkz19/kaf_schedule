@@ -16,9 +16,9 @@ app.use(cors());
 app.use(express.static(path.resolve(__dirname, './dist/')));
 
 const start = async () => {
-    // await mongoose.connect('mongodb://localhost:27017/schedule-viewer');
     try { 
-        await mongoose.connect('mongodb://database:27017/schedule-viewer');
+        // await mongoose.connect('mongodb://database:27017/schedule-viewer');
+        await mongoose.connect('mongodb://localhost:27017/schedule-viewer');
 
         app.listen(port, () => {
             console.log(`Server started on http://localhost:${port}`);
@@ -148,31 +148,57 @@ app.get('/api/groups', (req, res) => {
     const { dir } = req.query;
 
     try {
+        // Проверяем, является ли путь директорией
+        const stats = fs.statSync(dir);
+        
+        if (!stats.isDirectory()) {
+            return res.status(400).json({ message: 'Указанный путь не является директорией' });
+        }
+        
         const files = fs.readdirSync(dir);
-        const title = files.map((file) => path.basename(file).split('.')[0]);
+        // Фильтруем только Excel-файлы и исключаем временные файлы
+        const excelFiles = files.filter(file => 
+            (file.endsWith('.xlsx') || file.endsWith('.xls')) && !file.includes('~')
+        );
+        
+        const title = excelFiles.map((file) => path.basename(file).split('.')[0]);
 
         return res.status(200).json(title);
     } catch (e) {
         console.log('ошибка', e);
-        return res.status(500).json({ message: 'Директория не найдена' });
+        return res.status(500).json({ message: 'Директория не найдена или произошла ошибка при чтении' });
     }
 });
 
 app.get('/api/subjects', (req, res) => {
-    const { group } = req.query;
-
-    const subjects = getRange(path.resolve(__dirname, `./files/${group}.xlsx`), 'A39:O60');
-
-    const filteredSubjects = subjects.filter(s => s.abbr?.length > 1 && s.abbr?.length <= 4)
-
-    return res.status(200).json(filteredSubjects);
+    const { group, workDir } = req.query;
+    
+    try {
+        // Используем workDir, если он предоставлен, иначе используем локальный путь
+        const filePath = workDir 
+            ? `${workDir}${workDir.endsWith('/') || workDir.endsWith('\\') ? '' : '/'}${group}.xlsx` 
+            : path.resolve(__dirname, `./files/${group}.xlsx`);
+            
+        const subjects = getRange(filePath, 'A39:O60');
+        const filteredSubjects = subjects.filter(s => s.abbr?.length > 1 && s.abbr?.length <= 4);
+        
+        return res.status(200).json(filteredSubjects);
+    } catch (error) {
+        console.log('Ошибка при чтении файла:', error);
+        return res.status(500).json({ message: 'Файл не найден или произошла ошибка при чтении' });
+    }
 });
 
 app.get('/api/schedule', async (req, res) => {
     try {
         const { workDir, group, kafId } = req.query;
 
-        const schedule = getRectangleFromExcel(`${workDir}${group}.xlsx`, 'D6:Y34');
+        // Исправляем формирование пути к файлу, добавляя проверку на завершающий слеш
+        const filePath = workDir 
+            ? `${workDir}${workDir.endsWith('/') || workDir.endsWith('\\') ? '' : '/'}${group}.xlsx` 
+            : path.resolve(__dirname, `./files/${group}.xlsx`);
+            
+        const schedule = getRectangleFromExcel(filePath, 'D6:Y34');
 
         if (kafId) {
             const thisKaf = await KafsModel.findOne({ _id: kafId }).populate({ path: 'audsIds' });
@@ -210,38 +236,58 @@ app.get('/api/schedule', async (req, res) => {
 app.get('/api/today', async (req, res) => {
     try { 
         const { workDir } = req.query;
+        console.log('API /api/today called with workDir:', workDir);
 
         const groupsSchedule = [];
         let cnt = 0;
 
+        console.log('Reading directory:', path.resolve(__dirname, workDir));
         const schedule = fs
             .readdirSync(path.resolve(__dirname, workDir))
             .filter((file) => !file.includes('~'));
+        
+        console.log('Found files:', schedule);
 
         schedule.forEach((file) => {
-            groupsSchedule.push(
-                getRectangleFromExcel(`${path.resolve(__dirname, workDir)}/${file}`, 'D6:Y34'),
-            );
+            console.log('Processing file:', file);
+            const filePath = path.join(path.resolve(__dirname, workDir), file);
+            console.log('Full file path:', filePath);
+            
+            const data = getRectangleFromExcel(filePath, 'D6:Y34');
+            console.log(`Extracted ${data.length} days from ${file}`);
+            groupsSchedule.push(data);
         });
 
+        console.log('Total groups processed:', groupsSchedule.length);
+
         const result = [];
-        groupsSchedule
+        const filteredGroups = groupsSchedule
             .map((group) => { 
-                return group.filter((day) => {
-                    const today = new Date().setHours(0, 0, 0, 0);
+                const filteredDays = group.filter((day) => {
+                    // Устанавливаем конкретную дату 11.04.2025 (месяцы 0-индексированные)
+                    const today = new Date(2025, 3, 11).setHours(0, 0, 0, 0);
                     const date = new Date(day.date).setHours(0, 0, 0, 0);
                     return today === date;
-                })
-            })
-            .map((group) => {
-                group[0].groupName = schedule[cnt]?.split('.')[0];
-                cnt += 1;
-                return result.push(group[0]);
+                });
+                console.log(`Found ${filteredDays.length} matching days for group`);
+                return filteredDays;
             });
+            
+        filteredGroups.forEach((group) => {
+            if (group.length > 0) {
+                console.log('Adding group to results:', schedule[cnt]?.split('.')[0]);
+                group[0].groupName = schedule[cnt]?.split('.')[0];
+                result.push(group[0]);
+            }
+            cnt += 1;
+        });
+
+        console.log('Final result count:', result.length);
+        console.log('Result data:', JSON.stringify(result, null, 2));
 
         return res.status(200).json(result);
     } catch (e) {
-        console.log(e);        
+        console.log('Error in /api/today endpoint:', e);        
         return res.status(500).json({message: 'Произошла ошибка'})
     }
 });
